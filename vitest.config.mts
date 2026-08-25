@@ -27,6 +27,12 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // Tests must exercise the library SOURCE, not the built dist: dist is
+      // gitignored (absent in CI, stale locally after edits), and coverage is
+      // measured against source files. Without this, "@/graph-canvas" resolves
+      // through the package's `main` to dist/index.js. Listed before the "@"
+      // catch-all — aliases match in insertion order.
+      "@/graph-canvas": `${import.meta.dirname}/graph-canvas/index.ts`,
       "@": import.meta.dirname,
     },
   },

@@ -23,6 +23,10 @@ jobs:
       - run: npm run test:coverage
       # Production dependencies must stay free of known vulnerabilities.
       - run: npm audit --omit=dev --audit-level=moderate
+      # The Next app resolves graph-canvas through its package `main` (dist/),
+      # which is gitignored — build the library before the app build needs it.
+      # Tests don't need it: vitest aliases "@/graph-canvas" to the source.
+      - run: npm --prefix graph-canvas run build
       - run: npm run build
 
   # The checks above only ever see the source. They cannot catch a package that
