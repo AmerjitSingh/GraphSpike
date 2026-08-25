@@ -7,6 +7,8 @@ scale. Nodes and edges are painted onto canvas, so a 10,000-node graph pans and
 zooms smoothly; the node you interact with is swapped for real DOM, so it can
 hold ordinary React content — inputs, popovers, portals.
 
+[![The demo gallery — one behaviour per page](docs/demo-gallery.png)](#demos)
+
 ```tsx
 import { GraphCanvas } from "@graphspike/graph-canvas";
 
