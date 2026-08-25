@@ -17,3 +17,26 @@ export const DEFAULT_NODE_RADIUS = 40;
 export const RECT_W = 168;
 export const RECT_H = 108;
 export const RECT_RADIUS = 28;
+
+/**
+ * How many nodes may occupy the DOM layer at once.
+ *
+ * Promotion is what makes `renderNode` work, but it costs two DOM elements and
+ * a React subtree per node, and a group drag rewrites every promoted node's
+ * position each frame — so the cost is paid per frame, not just at mount.
+ * Selecting every node of a large graph would otherwise materialise the whole
+ * graph as DOM, which is precisely the thing canvas rendering exists to avoid.
+ *
+ * Above this budget the surplus stays on the canvas layer, still drawn with its
+ * selected styling and still draggable through `useCanvasNodeDrag` — it only
+ * loses its custom React body. Sized to comfortably cover a screenful of nodes
+ * at a working zoom, where promotion is actually visible to the user.
+ */
+export const MAX_PROMOTED_NODES = 300;
+
+/** Graph-space slack added around the viewport when choosing which selected
+ *  nodes to promote, so a node whose centre is just off-screen but whose body
+ *  still overlaps the edge keeps its DOM. Only ever over-includes: a node
+ *  wrongly promoted is invisible extra work, one wrongly dropped is a visible
+ *  loss of its rendered content. */
+export const PROMOTE_CULL_MARGIN = 160;

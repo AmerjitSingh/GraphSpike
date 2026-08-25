@@ -752,6 +752,13 @@ interface NodeLayerProps<T> {
     pointerId: number
   ) => void;
   activeOnly?: boolean;
+  /** Which nodes get a DOM body when `activeOnly` is set. Defaults to the whole
+   *  selection; `GraphCanvas` narrows it to a viewport-culled, budgeted subset
+   *  and hands `NodeCanvasLayer` the same list to skip. */
+  promotedNodeIds?: string[];
+  /** Reports the node this layer is dragging (null when it stops), so the owner
+   *  can keep it promoted even if the pointer carries it off screen. */
+  onActiveDragChange?: (id: string | null) => void;
   snapToGrid?: number;
 }
 
@@ -780,6 +787,8 @@ export const NodeLayer = memo(function NodeLayer<T>({
   onPortContextMenu,
   onConnectStart,
   activeOnly = false,
+  promotedNodeIds,
+  onActiveDragChange,
   snapToGrid,
 }: NodeLayerProps<T>) {
   const store = useRawGraphCanvasStore();
@@ -807,12 +816,12 @@ export const NodeLayer = memo(function NodeLayer<T>({
   const activeNodes = useMemo(() => {
     if (!activeOnly) return nodes;
     const result: GraphNode<T>[] = [];
-    for (const id of selectedNodeIds) {
+    for (const id of promotedNodeIds ?? selectedNodeIds) {
       const n = nodeById.get(id);
       if (n) result.push(n);
     }
     return result;
-  }, [activeOnly, selectedNodeIds, nodes, nodeById]);
+  }, [activeOnly, promotedNodeIds, selectedNodeIds, nodes, nodeById]);
 
   // Per-node port data, resolved once per structural change rather than per
   // render. `GraphNodeItem` is memoised, but building these inline handed it
@@ -856,6 +865,10 @@ export const NodeLayer = memo(function NodeLayer<T>({
       // Every drag is a transient phase — suppresses onPositionsChange
       // until handleMoveEnd fires (or the drag is cancelled).
       store.getState().beginTransient();
+      // Pin this node's promotion for the duration of the drag: its element
+      // owns the pointer capture, so being culled mid-drag would unmount it and
+      // commit the move early.
+      onActiveDragChange?.(id);
 
       const peers = store.getState().selectedNodeIds;
       const peersSet = new Set(peers);
@@ -872,7 +885,7 @@ export const NodeLayer = memo(function NodeLayer<T>({
       }
       groupDragRef.current = { draggedId: id, startX: startPos.x, startY: startPos.y, peerInitial };
     },
-    [store]
+    [store, onActiveDragChange]
   );
 
   const handleMove = useCallback(
@@ -903,6 +916,7 @@ export const NodeLayer = memo(function NodeLayer<T>({
 
   const handleMoveEnd = useCallback(
     (id: string, x: number, y: number) => {
+      onActiveDragChange?.(null);
       // A node deleted mid-drag (this also covers the unmount-commit path in
       // GraphNodeItem) has no position; reporting a move for it would hand the
       // consumer an id it has already removed. Same guard as useCanvasNodeDrag.
@@ -922,11 +936,12 @@ export const NodeLayer = memo(function NodeLayer<T>({
       // Exit the transient phase; usePositionSync will flush onPositionsChange.
       store.getState().endTransient();
     },
-    [store, onNodeMove]
+    [store, onNodeMove, onActiveDragChange]
   );
 
   const handleMoveCancel = useCallback(
     (id: string, x: number, y: number) => {
+      onActiveDragChange?.(null);
       // Restore only nodes that still exist — recreating a position for one
       // deleted mid-drag would resurrect it. Same guard as useCanvasNodeDrag.
       const live = store.getState().positions;
@@ -946,7 +961,7 @@ export const NodeLayer = memo(function NodeLayer<T>({
       // ended up moving.
       store.getState().endTransient();
     },
-    [store]
+    [store, onActiveDragChange]
   );
 
   const handleClick = useCallback(

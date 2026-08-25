@@ -64,6 +64,10 @@ export interface RenderCanvasNodeProps<T> {
     y: number;
     radius: number;
     zoom: number;
+    /** True when this node is selected but was drawn here anyway, because the
+     *  DOM layer's promotion budget was full. Style it as selected to match
+     *  `renderNode`, or the node changes appearance at the budget boundary. */
+    isSelected?: boolean;
 }
 
 interface NodeCanvasLayerProps<T> {
@@ -74,14 +78,20 @@ interface NodeCanvasLayerProps<T> {
     height: number;
     getNodeRadius: (node: GraphNode<T>) => number;
     getNodeShape?: (node: GraphNode<T>) => string;
-    /** Custom canvas rendering for each unselected node. Return `true` to skip default drawing. */
+    /** Custom canvas rendering for each node this layer draws. Return `true` to
+     *  skip default drawing. Check `isSelected`: this layer also draws selected
+     *  nodes that the DOM layer's promotion budget had no room for. */
     renderCanvasNode?: (props: RenderCanvasNodeProps<T>) => boolean | void;
-    /** Typed ports to draw on unselected nodes. */
+    /** Typed ports to draw on the nodes this layer draws. */
     getNodePorts?: (node: GraphNode<T>) => PortDef[];
     getNodeSize?: (node: GraphNode<T>) => NodeSize;
     /** Custom canvas rendering for a port. Return `true` to skip default drawing. */
     renderCanvasPort?: (props: RenderCanvasPortProps<T>) => boolean | void;
     selectedNodeIds: string[];
+    /** Nodes the DOM layer has taken. Defaults to the whole selection; when the
+     *  promotion budget caps that list, the selected nodes left out are drawn
+     *  here (with their selected styling) instead of vanishing. */
+    promotedNodeIds?: string[];
     /** Node ids to draw with a highlight ring (e.g. cross-graph linking). */
     highlightedNodeIds?: string[];
     /** Node holding the roving keyboard focus. Unselected nodes live on this
@@ -105,6 +115,7 @@ export const NodeCanvasLayer = memo(function NodeCanvasLayer<T>({
     getNodeSize,
     renderCanvasPort,
     selectedNodeIds,
+    promotedNodeIds,
     highlightedNodeIds,
     focusedNodeId,
     connectFromId,
@@ -147,6 +158,9 @@ export const NodeCanvasLayer = memo(function NodeCanvasLayer<T>({
         ctx.clearRect(0, 0, width, height);
 
         const selectedSet = new Set(selectedNodeIds);
+        // Who the DOM layer actually took — not the same as the selection once
+        // the promotion budget caps it.
+        const promotedSet = promotedNodeIds ? new Set(promotedNodeIds) : selectedSet;
         const highlightedSet = highlightedNodeIds ? new Set(highlightedNodeIds) : null;
         const renderCanvasNodeLatest = renderCanvasNodeRef.current;
         const getNodeShapeLatest = getNodeShapeRef.current;
@@ -160,9 +174,12 @@ export const NodeCanvasLayer = memo(function NodeCanvasLayer<T>({
         // drawn even mid-drag/mid-simulation.
         const view = getVisibleGraphRect(viewport, width, height);
 
-        // Draw all unselected nodes (selected nodes are handled by the React overlay)
+        // Draw everything the DOM layer didn't take. That is normally every
+        // unselected node, plus — once the promotion budget caps the DOM layer —
+        // the selected nodes it had no room for.
         for (const node of nodes) {
-            if (selectedSet.has(node.id)) continue;
+            if (promotedSet.has(node.id)) continue;
+            const isSelected = selectedSet.has(node.id);
 
             const pos = positions[node.id];
             if (!pos) continue;
@@ -237,7 +254,7 @@ export const NodeCanvasLayer = memo(function NodeCanvasLayer<T>({
             // with invisible-but-live snap targets — a drag would land on a port
             // nothing ever painted.
             const handled = renderCanvasNodeLatest
-                ? renderCanvasNodeLatest({ ctx, node, x, y, radius, zoom: viewport.zoom })
+                ? renderCanvasNodeLatest({ ctx, node, x, y, radius, zoom: viewport.zoom, isSelected })
                 : false;
 
             if (!handled) {
@@ -252,17 +269,20 @@ export const NodeCanvasLayer = memo(function NodeCanvasLayer<T>({
                     ctx.arc(x, y, scaledRadius, 0, 2 * Math.PI);
                 }
 
-                ctx.fillStyle = "#1e293b";   // bg-slate-800
+                // Selected nodes only reach this layer once the promotion budget
+                // is full. Match DefaultNodeContent's selected colours so a node
+                // doesn't change appearance as it crosses the budget.
+                ctx.fillStyle = isSelected ? "#3b82f6" : "#1e293b";
                 ctx.fill();
 
                 ctx.lineWidth = 2 * viewport.zoom;
-                ctx.strokeStyle = "#475569"; // border-slate-600
+                ctx.strokeStyle = isSelected ? "#60a5fa" : "#475569";
                 ctx.stroke();
 
                 // Draw basic label so it isn't literally just an empty circle
                 const label = String(getDataString(node.data, "label") ?? node.id);
                 if (label) {
-                    ctx.fillStyle = "#e2e8f0"; // text-slate-200
+                    ctx.fillStyle = isSelected ? "#ffffff" : "#e2e8f0";
                     ctx.font = `${12 * viewport.zoom}px sans-serif`;
                     ctx.textAlign = "center";
                     ctx.textBaseline = "middle";
@@ -339,6 +359,10 @@ export const NodeCanvasLayer = memo(function NodeCanvasLayer<T>({
         width,
         height,
         selectedNodeIds,
+        // Which nodes this layer owns is derived from the promoted list, so a
+        // change to it must repaint — otherwise a node the DOM layer just gave
+        // up stays missing here until something else happens to trigger a draw.
+        promotedNodeIds,
         highlightedNodeIds,
         focusedNodeId,
         connectFromId,

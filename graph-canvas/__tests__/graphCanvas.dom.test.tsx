@@ -10,6 +10,7 @@ import {
   getEdgeControlPoints,
   getEdgeRouteGeometry,
 } from "../geometry";
+import { MAX_PROMOTED_NODES } from "../constants";
 import type {
   GraphCanvasRef,
   GraphContextMenuProps,
@@ -730,6 +731,13 @@ function pointerEvt(type: string, init: PointerEventInit = {}) {
   });
 }
 
+/** How many nodes the DOM layer currently holds. */
+const promotedCount = (c: HTMLElement) => c.querySelectorAll("[data-gc-node]").length;
+
+/** A left-button pointer event at a client point. */
+const dragEvt = (type: string, x: number, y: number, buttons = 1) =>
+  pointerEvt(type, { button: 0, buttons, clientX: x, clientY: y });
+
 describe("GraphCanvas — canvas hit-testing", () => {
   it("does not treat a portaled node control click as a canvas click", () => {
     const onSelectionChange = vi.fn<(ids: string[]) => void>();
@@ -1071,6 +1079,120 @@ describe("GraphCanvas — optional chrome", () => {
   it("renders consumer overlay children", () => {
     const { container } = renderGraph({ children: <div data-testid="overlay" /> });
     expect(container.querySelector('[data-testid="overlay"]')).toBeTruthy();
+  });
+});
+
+describe("GraphCanvas — DOM promotion budget", () => {
+  // setup.dom fixes the container at 800x600, so with these positions only a
+  // handful of nodes are ever on screen.
+  const many: GraphNode<Data>[] = Array.from({ length: 1200 }, (_, i) => ({
+    id: `n${i}`,
+    data: { label: `n${i}` },
+  }));
+  const manyPositions: Record<string, NodePosition> = Object.create(null);
+  for (let i = 0; i < many.length; i++) {
+    manyPositions[`n${i}`] = { x: (i % 40) * 400, y: Math.floor(i / 40) * 400 };
+  }
+
+  function renderMany(over: Record<string, unknown> = {}) {
+    return render(
+      <GraphCanvas<Data, unknown>
+        nodes={many}
+        edges={[]}
+        initialPositions={manyPositions}
+        layoutEnabled={false}
+        selectedNodeIds={many.map((n) => n.id)}
+        {...over}
+      />
+    );
+  }
+
+  it("caps how many selected nodes get a DOM body", () => {
+    // Selecting everything must not materialise the graph as DOM — that is the
+    // cost canvas rendering exists to avoid, and a group drag pays it per frame.
+    const { container } = renderMany();
+    expect(promotedCount(container)).toBeLessThanOrEqual(MAX_PROMOTED_NODES);
+    expect(promotedCount(container)).toBeLessThan(many.length);
+  });
+
+  it("promotes the whole selection when it fits the budget", () => {
+    const few = many.slice(0, 5).map((n) => n.id);
+    const { container } = renderMany({ selectedNodeIds: few });
+    expect(promotedCount(container)).toBe(5);
+  });
+
+  it("still promotes everything under renderAllNodes", () => {
+    // That mode is an explicit opt-in to DOM for the whole graph, and the
+    // canvas layer isn't mounted to catch anything left behind.
+    const small = many.slice(0, 50);
+    const smallPositions: Record<string, NodePosition> = Object.create(null);
+    for (const n of small) smallPositions[n.id] = manyPositions[n.id];
+    const { container } = render(
+      <GraphCanvas<Data, unknown>
+        nodes={small}
+        edges={[]}
+        initialPositions={smallPositions}
+        layoutEnabled={false}
+        renderAllNodes
+        selectedNodeIds={small.map((n) => n.id)}
+      />
+    );
+    expect(promotedCount(container)).toBe(small.length);
+  });
+
+  it("prefers on-screen nodes when the budget is tight", () => {
+    const { container } = renderMany();
+    // n0 sits at the origin, inside the 800x600 viewport; n1100 is far away.
+    expect(container.querySelector('[data-gc-node="n0"]')).toBeTruthy();
+    expect(container.querySelector('[data-gc-node="n1100"]')).toBeNull();
+  });
+
+  it("keeps hit-testing correct after a mass move takes the bulk-reindex path", () => {
+    // Moving most of the graph at once switches the spatial index from
+    // per-node patching to a wholesale rebuild. The two strategies must be
+    // indistinguishable from the outside, so verify picking against the
+    // post-move geometry rather than trusting the branch.
+    const onNodeClick = vi.fn<(id: string, event: React.MouseEvent) => void>();
+    const near: GraphNode<Data>[] = [
+      { id: "p", data: { label: "P" } },
+      { id: "q", data: { label: "Q" } },
+    ];
+    const nearPositions = { p: { x: -100, y: 0 }, q: { x: 100, y: 0 } };
+    const { container } = render(
+      <GraphCanvas<Data, unknown>
+        nodes={near}
+        edges={[]}
+        initialPositions={nearPositions}
+        layoutEnabled={false}
+        selectedNodeIds={["p", "q"]}
+        onNodeClick={onNodeClick}
+      />
+    );
+
+    // Group-drag both nodes right by 200 graph units — 100% of the graph moves.
+    const el = container.querySelector('[data-gc-node="p"]') as HTMLElement;
+    act(() => { el.dispatchEvent(dragEvt("pointerdown", 0, 0)); });
+    act(() => { el.dispatchEvent(dragEvt("pointermove", 200, 0)); });
+    act(() => { el.dispatchEvent(dragEvt("pointerup", 200, 0, 0)); });
+
+    const canvas = container.querySelector(".gc-canvas") as HTMLElement;
+    // q started at x=100 and moved to x=300.
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...toClient(300, 0) }));
+    });
+    expect(onNodeClick).toHaveBeenCalledWith("q", expect.anything());
+  });
+
+  it("keeps a dragged node promoted after the pointer carries it off screen", () => {
+    // Its element owns the pointer capture: culling it mid-drag would unmount
+    // it, commit the move early and strand the gesture.
+    const { container } = renderMany({ selectedNodeIds: ["n0"] });
+    const el = container.querySelector('[data-gc-node="n0"]') as HTMLElement;
+    act(() => { el.dispatchEvent(dragEvt("pointerdown", 0, 0)); });
+    // Drag it far outside the viewport.
+    act(() => { el.dispatchEvent(dragEvt("pointermove", 5000, 5000)); });
+    expect(container.querySelector('[data-gc-node="n0"]')).toBeTruthy();
+    act(() => { el.dispatchEvent(dragEvt("pointerup", 5000, 5000, 0)); });
   });
 });
 

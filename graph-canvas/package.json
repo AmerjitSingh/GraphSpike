@@ -1,6 +1,6 @@
 {
   "name": "@graphspike/graph-canvas",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "A React component for node-edge graphs, rendered on canvas with a DOM layer for the node you're interacting with.",
   "author": "Amerjit Singh Brench",
   "license": "Apache-2.0",

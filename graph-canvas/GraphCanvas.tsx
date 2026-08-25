@@ -45,6 +45,8 @@ import { resolveNodePorts } from "./ports.js";
 import type { CSSProperties } from "react";
 import type { GraphCanvasProps, GraphCanvasRef, GraphEdge, GraphNode, NodePosition } from "./types.js";
 
+import { MAX_PROMOTED_NODES, PROMOTE_CULL_MARGIN } from "./constants.js";
+
 const DEFAULT_LINK_DISTANCE = 140;
 const DEFAULT_CHARGE_STRENGTH = -400;
 const CONTEXT_MENU_HORIZONTAL_GUTTER = 220;
@@ -57,6 +59,13 @@ const HOVER_TOLERANCE_PX = 10;
 
 /** Multiplier applied by one press of the zoom-in / zoom-out chrome buttons. */
 const ZOOM_STEP = 1.3;
+
+/** Fraction of the graph that must have moved in one tick before the spatial
+ *  index is rebuilt wholesale instead of patched node by node. Derived from the
+ *  measured crossover (a rebuild costs about 1.7x one full patching pass, so
+ *  patching wins until roughly 0.59 of the graph is dirty); rounded down so the
+ *  common cases — a single drag, a handful of nodes — always take the patch. */
+const BULK_REINDEX_RATIO = 0.6;
 
 /** Screen-space breathing room required around a node before keyboard focus
  *  counts it as already revealed. Without a margin a node flush against the
@@ -276,6 +285,13 @@ function GraphCanvasInner<T, E>({
         if (removedIds.length > 0) spatialIndex.current.remove(removedIds);
       }
 
+      // Collect first, then choose a strategy by how much actually moved.
+      // Patching is per-node remove-then-insert on the R-tree; bulk loading is
+      // STR-packed and pays a flat cost over the whole graph. Measured on 10k
+      // nodes: patching one node is ~2300x cheaper than a rebuild, but patching
+      // all of them is ~1.7x more expensive — which is exactly the group drag
+      // of a select-all. Neither strategy is right on its own.
+      const moved: GraphNode<T>[] = [];
       for (const node of nodes) {
         const next = positions[node.id];
         if (!next) continue;
@@ -285,7 +301,15 @@ function GraphCanvasInner<T, E>({
           previous.x !== next.x ||
           previous.y !== next.y
         ) {
-          spatialIndex.current.update(node, next, getNodeRadiusProp);
+          moved.push(node);
+        }
+      }
+
+      if (moved.length > nodes.length * BULK_REINDEX_RATIO) {
+        spatialIndex.current.rebuild(nodes, positions, getNodeRadiusProp);
+      } else {
+        for (const node of moved) {
+          spatialIndex.current.update(node, positions[node.id], getNodeRadiusProp);
         }
       }
     }
@@ -501,6 +525,10 @@ function GraphCanvasInner<T, E>({
   // Hovered node id (drives cross-graph hover highlight + onNodeHover).
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const hoveredIdRef = useRef<string | null>(null);
+
+  // The node NodeLayer is currently dragging, so promotion can pin it. Set once
+  // at drag start and cleared at drag end — never per frame.
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
 
   // ── Edge selection / highlight (sets, so the layer can test membership)
   const selectedEdgeSet = useMemo(
@@ -775,6 +803,62 @@ function GraphCanvasInner<T, E>({
       return node ? resolvedGetNodeRadius(node) : 40;
     });
   }, [layoutReady, positions, transientDepth, fitToView, nodeById, resolvedGetNodeRadius, userInteractedRef, viewportSize]);
+
+  // ── Which selected nodes get a DOM body.
+  //
+  // Promotion is capped and viewport-culled rather than following the selection
+  // outright: a select-all on a large graph would otherwise hand the browser
+  // the entire graph as DOM, and a group drag then rewrites every one of those
+  // subtrees per frame. The surplus stays on the canvas layer — still drawn
+  // selected, still draggable — so the only thing lost above the cap is the
+  // custom React body, which is exactly the trade the canvas layer already makes
+  // for unselected nodes.
+  //
+  // `NodeCanvasLayer` is handed this same list to skip, so the two layers can
+  // never disagree about who owns a node and leave it drawn twice or not at all.
+  const promotedNodeIds = useMemo(() => {
+    // Every node is promoted in this mode and the canvas layer isn't mounted,
+    // so there is nothing to budget.
+    if (renderAllNodes) return effectiveSelection;
+    if (effectiveSelection.length <= MAX_PROMOTED_NODES && !viewportSize) {
+      return effectiveSelection;
+    }
+
+    const view = viewportSize
+      ? getVisibleGraphRect(viewport, viewportSize.width, viewportSize.height)
+      : null;
+    // A small selection always fits the budget, so skip the culling work.
+    if (!view || effectiveSelection.length <= MAX_PROMOTED_NODES) return effectiveSelection;
+
+    // On-screen nodes claim the budget first; the margin band only fills what
+    // they leave, so a node the user is actually looking at can't be starved of
+    // its DOM by one just outside the viewport.
+    const onScreen: string[] = [];
+    const nearby: string[] = [];
+    for (const id of effectiveSelection) {
+      const p = positions[id];
+      if (!p) continue;
+      if (p.x >= view.minX && p.x <= view.maxX && p.y >= view.minY && p.y <= view.maxY) {
+        if (onScreen.length < MAX_PROMOTED_NODES) onScreen.push(id);
+      } else if (
+        nearby.length < MAX_PROMOTED_NODES &&
+        p.x >= view.minX - PROMOTE_CULL_MARGIN && p.x <= view.maxX + PROMOTE_CULL_MARGIN &&
+        p.y >= view.minY - PROMOTE_CULL_MARGIN && p.y <= view.maxY + PROMOTE_CULL_MARGIN
+      ) {
+        nearby.push(id);
+      }
+    }
+
+    const result = onScreen.length >= MAX_PROMOTED_NODES
+      ? onScreen
+      : onScreen.concat(nearby.slice(0, MAX_PROMOTED_NODES - onScreen.length));
+
+    // A node being dragged must keep its DOM even if the pointer carries it off
+    // screen — its element owns the pointer capture, and unmounting mid-drag
+    // commits the move and strands the gesture.
+    if (draggingNodeId && !result.includes(draggingNodeId)) result.push(draggingNodeId);
+    return result;
+  }, [renderAllNodes, effectiveSelection, viewportSize, viewport, positions, draggingNodeId]);
 
   // ── Transform string (for HTML node layer)
   const transformStyle = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`;
@@ -1389,6 +1473,8 @@ function GraphCanvasInner<T, E>({
           dragLine={dragLine}
           focusedNodeId={keyboardNav ? keyboardFocusId : null}
           connectFromId={connectFromId}
+          promotedNodeIds={promotedNodeIds}
+          onActiveDragChange={setDraggingNodeId}
           // Same gate the canvas-node drag uses, so promoted and unpromoted
           // nodes respond to a left-drag identically.
           nodeDragEnabled={!panOnDrag && !isSpacePressed}
@@ -1424,6 +1510,9 @@ function GraphCanvasInner<T, E>({
           getNodeSize={getNodeSize}
           renderCanvasPort={renderCanvasPort}
           selectedNodeIds={effectiveSelection}
+          // Skip exactly what the DOM layer took, not the whole selection: a
+          // selected node above the promotion budget still needs painting here.
+          promotedNodeIds={promotedNodeIds}
           highlightedNodeIds={highlightedNodeIds}
           focusedNodeId={keyboardNav ? keyboardFocusId : null}
           connectFromId={connectFromId}

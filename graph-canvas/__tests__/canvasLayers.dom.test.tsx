@@ -63,6 +63,47 @@ describe("NodeCanvasLayer — drawing", () => {
     expect(ctx.count("arc")).toBe(1);
   });
 
+  it("draws selected nodes the DOM layer had no room to promote", () => {
+    // The promotion budget can cap the DOM layer below the selection. Anything
+    // it left behind must still be painted here, or it vanishes entirely.
+    renderNodes({ selectedNodeIds: ["a", "b"], promotedNodeIds: ["a"] });
+    expect(ctx.count("arc")).toBe(2); // b (selected, unpromoted) + c
+  });
+
+  it("paints an unpromoted selected node with its selected colours", () => {
+    // Otherwise a node visibly changes appearance as it crosses the budget.
+    renderNodes({ selectedNodeIds: ["a"], promotedNodeIds: [] });
+    // DefaultNodeContent's selected colours, so the two layers agree.
+    expect(ctx.stylesFor("fill").map((s) => s.fillStyle)).toContain("#3b82f6");
+    expect(ctx.stylesFor("stroke").map((s) => s.strokeStyle)).toContain("#60a5fa");
+    // Unselected peers keep the ordinary body colour.
+    expect(ctx.stylesFor("fill").map((s) => s.fillStyle)).toContain("#1e293b");
+  });
+
+  it("tells renderCanvasNode which nodes are selected", () => {
+    const seen: { id: string; isSelected?: boolean }[] = [];
+    renderNodes({
+      selectedNodeIds: ["a"],
+      promotedNodeIds: [],
+      renderCanvasNode: ({ node, isSelected }) => {
+        seen.push({ id: node.id, isSelected });
+        return true;
+      },
+    });
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        { id: "a", isSelected: true },
+        { id: "b", isSelected: false },
+      ])
+    );
+  });
+
+  it("falls back to skipping the whole selection when no promoted list is given", () => {
+    // Back-compat for NodeCanvasLayer used directly, without GraphCanvas.
+    renderNodes({ selectedNodeIds: ["a", "b"] });
+    expect(ctx.count("arc")).toBe(1);
+  });
+
   it("skips nodes with no position", () => {
     renderNodes({ positions: { a: positions.a } });
     expect(ctx.count("arc")).toBe(1);

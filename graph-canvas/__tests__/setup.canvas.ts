@@ -10,6 +10,10 @@
 export interface DrawCall {
   op: string;
   args: unknown[];
+  /** Fill/stroke colours in force when the call was made. Styles are plain
+   *  assignable fields, so without this snapshot a test can only see *that*
+   *  something was filled, never in what colour. */
+  style: { fillStyle: unknown; strokeStyle: unknown; lineWidth: unknown };
 }
 
 export interface RecordingContext {
@@ -18,6 +22,8 @@ export interface RecordingContext {
   ops(): string[];
   count(op: string): number;
   argsFor(op: string): unknown[][];
+  /** The styles in force at each occurrence of `op`. */
+  stylesFor(op: string): DrawCall["style"][];
   reset(): void;
 }
 
@@ -38,6 +44,7 @@ export function installRecordingCanvas(): RecordingContext {
     ops: () => calls.map((c) => c.op),
     count: (op) => calls.filter((c) => c.op === op).length,
     argsFor: (op) => calls.filter((c) => c.op === op).map((c) => c.args),
+    stylesFor: (op) => calls.filter((c) => c.op === op).map((c) => c.style),
     reset: () => {
       calls.length = 0;
     },
@@ -51,9 +58,14 @@ export function installRecordingCanvas(): RecordingContext {
       textAlign: "start", textBaseline: "alphabetic", lineCap: "butt",
       lineJoin: "miter", globalAlpha: 1,
     };
+    const snapshot = () => ({
+      fillStyle: ctx.fillStyle,
+      strokeStyle: ctx.strokeStyle,
+      lineWidth: ctx.lineWidth,
+    });
     for (const op of NOOP_METHODS) {
       ctx[op] = (...args: unknown[]) => {
-        calls.push({ op, args });
+        calls.push({ op, args, style: snapshot() });
         if (op === "getLineDash") return [];
         return undefined;
       };
@@ -61,11 +73,11 @@ export function installRecordingCanvas(): RecordingContext {
     // Text metrics are read to decide truncation; return a width proportional
     // to the string so the "too wide" branch is reachable.
     ctx.measureText = (text: string) => {
-      calls.push({ op: "measureText", args: [text] });
+      calls.push({ op: "measureText", args: [text], style: snapshot() });
       return { width: String(text).length * 8 };
     };
     ctx.createLinearGradient = (...args: unknown[]) => {
-      calls.push({ op: "createLinearGradient", args });
+      calls.push({ op: "createLinearGradient", args, style: snapshot() });
       return { addColorStop: () => {} };
     };
     return ctx as unknown as CanvasRenderingContext2D;
