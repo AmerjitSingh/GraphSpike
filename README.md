@@ -7,7 +7,7 @@ scale. Nodes and edges are painted onto canvas, so a 10,000-node graph pans and
 zooms smoothly; the node you interact with is swapped for real DOM, so it can
 hold ordinary React content — inputs, popovers, portals.
 
-[![The demo gallery — one behaviour per page](docs/demo-gallery.png)](#demos)
+[![The Workflow Nodes demo — agent nodes with typed ports, provider sub-nodes and s-curved edges](docs/workflow-nodes.png)](#demos)
 
 ```tsx
 import { GraphCanvas } from "@graphspike/graph-canvas";
@@ -49,6 +49,8 @@ npm run dev
 
 Then open <http://localhost:3031> for the demo gallery — one behaviour per
 page, from a two-node renderer up to 10,000 nodes and 13,332 edges.
+
+![The demo gallery home page, with a card for each of the fourteen demos](docs/demo-gallery.png)
 
 ## Repository layout
 
