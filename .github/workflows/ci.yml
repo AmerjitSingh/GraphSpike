@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Type-check (native TS 7) + oxlint + unit tests. oxlint is a Rust binary
+      # with no Node/TypeScript dependency, so unlike typescript-eslint it runs
+      # fine against TypeScript 7.
+      - run: npm run check
+      # Enforces the coverage thresholds in vitest.config.mts.
+      - run: npm run test:coverage
+      # Production dependencies must stay free of known vulnerabilities.
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run build
+
+  # The checks above only ever see the source. They cannot catch a package that
+  # builds fine but is unimportable once installed — extensionless ESM
+  # specifiers, a missing worker file, or a declaration that needs a type the
+  # tarball doesn't pull in. So build it, pack it, install it, and use it.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Build the library
+        run: |
+          mkdir -p dist
+          printf 'obsolete output\n' > dist/__stale_build_output__.js
+          printf 'obsolete output\n' > dist/__stale_build_output__.d.ts
+          npm run build
+          test ! -e dist/__stale_build_output__.js
+          test ! -e dist/__stale_build_output__.d.ts
+        working-directory: graph-canvas
+
+      - name: Pack
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+        working-directory: graph-canvas
+
+      - name: Fail if tests or sources leaked into the tarball
+        run: |
+          tar -tzf "$RUNNER_TEMP"/*.tgz > "$RUNNER_TEMP/files.txt"
+          cat "$RUNNER_TEMP/files.txt"
+          ! grep -qE '__tests__|\.test\.|/scripts/|\.map$' "$RUNNER_TEMP/files.txt"
+          grep -q 'package/LICENSE' "$RUNNER_TEMP/files.txt"
+          grep -q 'package/dist/hooks/forceWorker.js' "$RUNNER_TEMP/files.txt"
+
+      - name: Fail on extensionless relative ESM specifiers
+        run: |
+          cd graph-canvas/dist
+          if grep -rnE "from \"\.\.?/[^\"]*\"" --include='*.js' . | grep -v '\.js"'; then
+            echo "::error::relative specifiers must carry a .js extension for Node ESM"
+            exit 1
+          fi
+          if grep -rnE 'new URL\([^)]*\.ts' --include='*.js' .; then
+            echo "::error::published worker URLs must reference emitted .js files"
+            exit 1
+          fi
+          grep -Fq 'new URL("./forceWorker.js", import.meta.url)' hooks/useForceLayout.js
+          test -f hooks/forceWorker.js
+
+      # A real consumer install, in its own directory, with nothing from this
+      # repo on the resolution path.
+      - name: Install and import the packed artifact
+        run: |
+          mkdir -p "$RUNNER_TEMP/consumer" && cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install "$RUNNER_TEMP"/*.tgz react react-dom
+          npm install --save-dev typescript@7.0.2 @types/react@^19 @types/react-dom@^19
+          node --input-type=module -e "
+            import * as lib from '@graphspike/graph-canvas';
+            if (typeof lib.GraphCanvas !== 'function') throw new Error('GraphCanvas missing');
+            if (typeof lib.SpatialIndex !== 'function') throw new Error('SpatialIndex missing');
+            console.log('imported', Object.keys(lib).length, 'exports');
+          "
+
+      - name: Type-check the published declarations under NodeNext
+        run: |
+          cd "$RUNNER_TEMP/consumer"
+          cat > tsconfig.json <<'JSON'
+          {
+            "compilerOptions": {
+              "module": "NodeNext",
+              "moduleResolution": "NodeNext",
+              "target": "ES2022",
+              "lib": ["ES2023", "DOM"],
+              "jsx": "react-jsx",
+              "strict": true,
+              "noEmit": true
+            },
+            "files": ["probe.ts"]
+          }
+          JSON
+          printf 'import { GraphCanvas, type GraphNode } from "@graphspike/graph-canvas";\nconst n: GraphNode<{a:string}>[] = [];\nconsole.log(GraphCanvas, n);\n' > probe.ts
+          npx tsc -p tsconfig.json

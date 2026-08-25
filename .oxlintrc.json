@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "unicorn", "oxc", "import", "jsx-a11y", "vitest"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "env": {
+    "browser": true,
+    "es2024": true,
+    "node": true
+  },
+  "ignorePatterns": [
+    ".next/**",
+    "node_modules/**",
+    "coverage/**",
+    "next-env.d.ts"
+  ],
+  "rules": {
+    "react-hooks/exhaustive-deps": "warn",
+    "react-hooks/rules-of-hooks": "error",
+    // Obsolete under the automatic JSX runtime (tsconfig jsx: "react-jsx").
+    "react/react-in-jsx-scope": "off",
+    // `targetOrigin` is a window.postMessage concept; Worker.postMessage's
+    // second argument is a transfer list, so this fires falsely on workers.
+    "unicorn/require-post-message-target-origin": "off",
+    // d3-zoom stores the live transform on the element as `__zoom`; reading it
+    // is the documented way to get the transform without waiting for a frame.
+    "eslint/no-underscore-dangle": "off",
+    // The accessibility layer is a roving-tabindex listbox of rich, focusable
+    // items. A native <select>/<option> is a dropdown form control with quite
+    // different semantics and can't be driven this way, so the ARIA pattern is
+    // the correct choice here.
+    "jsx-a11y/prefer-tag-over-role": "off"
+  },
+  "overrides": [
+    {
+      "files": ["**/__tests__/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        // Test setup is imported for its side effects by design.
+        "import/no-unassigned-import": "off",
+        // Harnesses deliberately mount bare containers to stand in for the
+        // graph surface; accessibility is asserted on the real components.
+        "jsx-a11y/no-static-element-interactions": "off",
+        "jsx-a11y/click-events-have-key-events": "off"
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+node_modules
+.next
+out
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env*
+.DS_Store
+coverage/
+
+# built library output
+graph-canvas/dist/
+
+# generated framework and compiler metadata
+/next-env.d.ts
+*.tsbuildinfo

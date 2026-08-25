@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // NodeNext, not Bundler: this output is consumed by Node's ESM resolver,
+    // which does no extension probing. NodeNext makes `tsc` itself reject an
+    // extensionless relative import, so the specifiers in `dist` are correct by
+    // construction rather than patched up by a post-build rewrite.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["__tests__", "dist", "node_modules"]
+}
