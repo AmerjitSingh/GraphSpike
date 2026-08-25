@@ -1083,15 +1083,16 @@ describe("GraphCanvas — optional chrome", () => {
 });
 
 describe("GraphCanvas — DOM promotion budget", () => {
-  // setup.dom fixes the container at 800x600, so with these positions only a
-  // handful of nodes are ever on screen.
-  const many: GraphNode<Data>[] = Array.from({ length: 1200 }, (_, i) => ({
+  // Just over the budget, so the cap is exercised without paying for a graph
+  // far larger than the thing under test. setup.dom fixes the container at
+  // 800x600 and these positions are 400 apart, so only a handful are on screen.
+  const many: GraphNode<Data>[] = Array.from({ length: MAX_PROMOTED_NODES + 60 }, (_, i) => ({
     id: `n${i}`,
     data: { label: `n${i}` },
   }));
   const manyPositions: Record<string, NodePosition> = Object.create(null);
   for (let i = 0; i < many.length; i++) {
-    manyPositions[`n${i}`] = { x: (i % 40) * 400, y: Math.floor(i / 40) * 400 };
+    manyPositions[`n${i}`] = { x: (i % 20) * 400, y: Math.floor(i / 20) * 400 };
   }
 
   function renderMany(over: Record<string, unknown> = {}) {
@@ -1102,6 +1103,10 @@ describe("GraphCanvas — DOM promotion budget", () => {
         initialPositions={manyPositions}
         layoutEnabled={false}
         selectedNodeIds={many.map((n) => n.id)}
+        // The accessibility layer renders a button per node regardless of
+        // promotion; it is not what these tests measure, and mounting hundreds
+        // of them dominates their runtime.
+        keyboardNav={false}
         {...over}
       />
     );
@@ -1113,6 +1118,22 @@ describe("GraphCanvas — DOM promotion budget", () => {
     const { container } = renderMany();
     expect(promotedCount(container)).toBeLessThanOrEqual(MAX_PROMOTED_NODES);
     expect(promotedCount(container)).toBeLessThan(many.length);
+  });
+
+  it("applies the budget on the very first paint, before the container is measured", () => {
+    // The cull needs a measured viewport, which only arrives an effect later.
+    // Without a cap on that first pass the whole selection is promoted for one
+    // commit — precisely the DOM spike this exists to prevent. Every promoted
+    // node runs renderNode, so the set of ids it ever saw exposes the spike.
+    const rendered = new Set<string>();
+    renderMany({
+      renderNode: ({ node }: NodeRenderProps<Data>) => {
+        rendered.add(node.id);
+        return null;
+      },
+    });
+    expect(rendered.size).toBeLessThan(many.length);
+    expect(rendered.size).toBeLessThanOrEqual(MAX_PROMOTED_NODES);
   });
 
   it("promotes the whole selection when it fits the budget", () => {
@@ -1142,9 +1163,11 @@ describe("GraphCanvas — DOM promotion budget", () => {
 
   it("prefers on-screen nodes when the budget is tight", () => {
     const { container } = renderMany();
-    // n0 sits at the origin, inside the 800x600 viewport; n1100 is far away.
+    // n0 sits at the origin, inside the 800x600 viewport; the last node is
+    // thousands of graph units away in both axes.
+    const farthest = many[many.length - 1].id;
     expect(container.querySelector('[data-gc-node="n0"]')).toBeTruthy();
-    expect(container.querySelector('[data-gc-node="n1100"]')).toBeNull();
+    expect(container.querySelector(`[data-gc-node="${farthest}"]`)).toBeNull();
   });
 
   it("keeps hit-testing correct after a mass move takes the bulk-reindex path", () => {

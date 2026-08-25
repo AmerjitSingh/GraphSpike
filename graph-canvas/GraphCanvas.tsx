@@ -820,15 +820,18 @@ function GraphCanvasInner<T, E>({
     // Every node is promoted in this mode and the canvas layer isn't mounted,
     // so there is nothing to budget.
     if (renderAllNodes) return effectiveSelection;
-    if (effectiveSelection.length <= MAX_PROMOTED_NODES && !viewportSize) {
-      return effectiveSelection;
-    }
+    // A selection within budget is promoted whole — no culling work needed.
+    if (effectiveSelection.length <= MAX_PROMOTED_NODES) return effectiveSelection;
 
     const view = viewportSize
       ? getVisibleGraphRect(viewport, viewportSize.width, viewportSize.height)
       : null;
-    // A small selection always fits the budget, so skip the culling work.
-    if (!view || effectiveSelection.length <= MAX_PROMOTED_NODES) return effectiveSelection;
+    // The container hasn't been measured yet, so there is no "on screen" to
+    // cull against — but the budget still applies. Without this the very first
+    // paint of a large selection materialises the entire graph as DOM, which is
+    // the exact cost this memo exists to prevent; the cull then corrects which
+    // 300 once the ResizeObserver reports a size.
+    if (!view) return effectiveSelection.slice(0, MAX_PROMOTED_NODES);
 
     // On-screen nodes claim the budget first; the margin band only fills what
     // they leave, so a node the user is actually looking at can't be starved of
